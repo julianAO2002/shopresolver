@@ -1,0 +1,91 @@
+# Exercise 13: the same platform on Kubernetes.
+# inventory-service runs as 3 Pods behind a Service with a stable name;
+# OrdersService keeps using http://inventory-service:8080 without changes.
+#
+#   docker compose build
+#   kubectl apply -f k8s/shopresolver.yaml
+#
+# imagePullPolicy: Never uses the images built locally (Docker Desktop
+# Kubernetes shares the image store with Docker).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecommerce
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  namespace: ecommerce
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: inventory-service
+  template:
+    metadata:
+      labels:
+        app: inventory-service
+    spec:
+      containers:
+        - name: inventory
+          image: shopresolver-inventory-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-service
+  namespace: ecommerce
+spec:
+  selector:
+    app: inventory-service
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-service
+  namespace: ecommerce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orders-service
+  template:
+    metadata:
+      labels:
+        app: orders-service
+    spec:
+      containers:
+        - name: orders
+          image: shopresolver-orders-service:latest
+          imagePullPolicy: Never
+          env:
+            - name: Inventory__BaseUrl
+              value: http://inventory-service:8080
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-service
+  namespace: ecommerce
+spec:
+  type: NodePort
+  selector:
+    app: orders-service
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30081

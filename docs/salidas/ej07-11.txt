@@ -1,0 +1,206 @@
+
+===== Ejercicio 9 - Docker Compose =====
+
+$ docker compose up -d
+ Network shopresolver_ecommerce-network Creating 
+ Network shopresolver_ecommerce-network Created 
+ Container shopresolver-inventory-service-1 Creating 
+ Container shopresolver-inventory-service-1 Created 
+ Container shopresolver-orders-service-1 Creating 
+ Container shopresolver-orders-service-1 Created 
+ Container shopresolver-inventory-service-1 Starting 
+ Container shopresolver-inventory-service-1 Started 
+ Container shopresolver-orders-service-1 Starting 
+ Container shopresolver-orders-service-1 Started 
+
+$ docker compose ps --format table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.Ports}}
+NAME                               SERVICE             STATUS         PORTS
+shopresolver-inventory-service-1   inventory-service   Up 2 seconds   
+shopresolver-orders-service-1      orders-service      Up 1 second    0.0.0.0:8081->8080/tcp, [::]:8081->8080/tcp
+
+$ docker network ls --filter name=ecommerce
+NETWORK ID     NAME                             DRIVER    SCOPE
+0ea1bea35f65   shopresolver_ecommerce-network   bridge    local
+
+Direcciones asignadas:
+/shopresolver-inventory-service-1 172.29.0.2
+/shopresolver-orders-service-1 172.29.0.3
+
+$ curl -s http://localhost:8081/api/orders/resolve
+{"name":"inventory-service","addresses":["172.29.0.2"]}
+
+$ curl -s http://localhost:8081/api/orders/inventory/P001
+{"requestedUrl":"http://inventory-service:8080/api/inventory/P001","inventory":{"productId":"P001","stock":25,"server":"86ef2a49f6a5","address":"172.29.0.2"}}
+
+$ curl -s -X POST http://localhost:8081/api/orders -H content-type: application/json -d {"productId":"P001","quantity":2}
+{"id":1,"productId":"P001","quantity":2,"status":"CONFIRMED","servedBy":"86ef2a49f6a5","createdAt":"2026-11-11T19:48:11.0314232Z"}
+
+$ curl -s -w  [HTTP %{http_code}] -X POST http://localhost:8081/api/orders -H content-type: application/json -d {"productId":"P003","quantity":1}
+{"error":"Not enough stock for P003","available":0,"servedBy":"86ef2a49f6a5"} [HTTP 409]
+
+$ docker compose logs --no-log-prefix orders-service --tail 4
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'OrdersService.Controllers.OrdersController.Create (OrdersService)'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 POST http://localhost:8081/api/orders - 409 - application/json;+charset=utf-8 8.3326ms
+
+
+===== Ejercicio 7 - IP directa vs nombre logico =====
+
+Se levanta un segundo OrdersService (orders-by-ip) configurado con la IP fija http://172.29.0.2:8080
+$ docker run -d --name orders-by-ip --network shopresolver_ecommerce-network -p 8082:8080 -e Inventory__BaseUrl=http://172.29.0.2:8080 shopresolver-orders-service
+50f86a68fc46bd1685931ea622326f57552acdaf38cfc8e4b89b7c8995b94210
+
+--- Con ambas configuraciones funcionando ---
+$ curl -s http://localhost:8081/api/orders/inventory/P001
+{"requestedUrl":"http://inventory-service:8080/api/inventory/P001","inventory":{"productId":"P001","stock":25,"server":"86ef2a49f6a5","address":"172.29.0.2"}}
+
+$ curl -s http://localhost:8082/api/orders/inventory/P001
+{"requestedUrl":"http://172.29.0.2:8080/api/inventory/P001","inventory":{"productId":"P001","stock":25,"server":"86ef2a49f6a5","address":"172.29.0.2"}}
+
+--- Se recrea inventory-service (filler ocupa la IP liberada, como en el caso 172.18.0.5 -> 172.18.0.9) ---
+$ docker compose stop inventory-service
+ Container shopresolver-inventory-service-1 Stopping 
+ Container shopresolver-inventory-service-1 Stopped 
+
+$ docker compose rm -f inventory-service
+Going to remove shopresolver-inventory-service-1
+ Container shopresolver-inventory-service-1 Removing 
+ Container shopresolver-inventory-service-1 Removed 
+
+$ docker run -d --name filler --network shopresolver_ecommerce-network alpine sleep infinity
+7c0136da501cbda362ab2c0ce3e85644377ccd0a83ffd6700cc48766dde95042
+
+$ docker compose up -d inventory-service
+ Container shopresolver-inventory-service-1 Creating 
+ Container shopresolver-inventory-service-1 Created 
+ Container shopresolver-inventory-service-1 Starting 
+ Container shopresolver-inventory-service-1 Started 
+
+IP vieja: 172.29.0.2  |  IP nueva: 172.29.0.5  |  filler: 172.29.0.2
+
+$ curl -s -w  [HTTP %{http_code}] http://localhost:8081/api/orders/inventory/P001
+{"requestedUrl":"http://inventory-service:8080/api/inventory/P001","inventory":{"productId":"P001","stock":25,"server":"756d8558c4b8","address":"172.29.0.5"}} [HTTP 200]
+
+$ curl -s -w  [HTTP %{http_code}] http://localhost:8082/api/orders/inventory/P001
+{"requestedUrl":"http://172.29.0.2:8080/api/inventory/P001","error":"Inventory service unreachable: Connection refused (172.29.0.2:8080)"} [HTTP 503]
+
+
+===== Ejercicio 10 - Recrear la infraestructura =====
+
+--- ANTES ---
+/shopresolver-inventory-service-1 172.29.0.5
+/shopresolver-orders-service-1 172.29.0.3
+$ docker network inspect shopresolver_ecommerce-network --format Subnet={{range .IPAM.Config}}{{.Subnet}}{{end}}
+Subnet=172.29.0.0/16
+
+$ docker compose down
+ Container shopresolver-orders-service-1 Stopping 
+ Container shopresolver-orders-service-1 Stopped 
+ Container shopresolver-orders-service-1 Removing 
+ Container shopresolver-orders-service-1 Removed 
+ Container shopresolver-inventory-service-1 Stopping 
+ Container shopresolver-inventory-service-1 Stopped 
+ Container shopresolver-inventory-service-1 Removing 
+ Container shopresolver-inventory-service-1 Removed 
+ Network shopresolver_ecommerce-network Removing 
+ Network shopresolver_ecommerce-network Removed 
+
+$ docker compose up -d
+ Network shopresolver_ecommerce-network Creating 
+ Network shopresolver_ecommerce-network Created 
+ Container shopresolver-inventory-service-1 Creating 
+ Container shopresolver-inventory-service-1 Created 
+ Container shopresolver-orders-service-1 Creating 
+ Container shopresolver-orders-service-1 Created 
+ Container shopresolver-inventory-service-1 Starting 
+ Container shopresolver-inventory-service-1 Started 
+ Container shopresolver-orders-service-1 Starting 
+ Container shopresolver-orders-service-1 Started 
+
+--- DESPUES ---
+/shopresolver-inventory-service-1 172.29.0.2
+/shopresolver-orders-service-1 172.29.0.3
+$ docker network inspect shopresolver_ecommerce-network --format Subnet={{range .IPAM.Config}}{{.Subnet}}{{end}}
+Subnet=172.29.0.0/16
+
+$ curl -s http://localhost:8081/api/orders/resolve
+{"name":"inventory-service","addresses":["172.29.0.2"]}
+
+$ curl -s http://localhost:8081/api/orders/inventory/P002
+{"requestedUrl":"http://inventory-service:8080/api/inventory/P002","inventory":{"productId":"P002","stock":8,"server":"ad38a4435513","address":"172.29.0.2"}}
+
+
+===== Ejercicio 11 - Multiples instancias =====
+
+$ docker compose up -d --scale inventory-service=3
+ Container shopresolver-inventory-service-1 Running 
+ Container shopresolver-orders-service-1 Running 
+ Container shopresolver-inventory-service-3 Creating 
+ Container shopresolver-inventory-service-2 Creating 
+ Container shopresolver-inventory-service-2 Created 
+ Container shopresolver-inventory-service-3 Created 
+ Container shopresolver-inventory-service-3 Starting 
+ Container shopresolver-inventory-service-3 Started 
+ Container shopresolver-inventory-service-2 Starting 
+ Container shopresolver-inventory-service-2 Started 
+
+$ docker compose ps --format table {{.Name}}\t{{.Service}}\t{{.Status}}
+NAME                               SERVICE             STATUS
+shopresolver-inventory-service-1   inventory-service   Up 11 seconds
+shopresolver-inventory-service-2   inventory-service   Up 4 seconds
+shopresolver-inventory-service-3   inventory-service   Up 5 seconds
+shopresolver-orders-service-1      orders-service      Up 10 seconds
+
+Direcciones asignadas:
+/shopresolver-inventory-service-1 172.29.0.2
+/shopresolver-inventory-service-2 172.29.0.5
+/shopresolver-inventory-service-3 172.29.0.4
+/shopresolver-orders-service-1 172.29.0.3
+
+$ curl -s http://localhost:8081/api/orders/resolve
+{"name":"inventory-service","addresses":["172.29.0.4","172.29.0.2","172.29.0.5"]}
+
+--- 12 consultas al mismo nombre http://inventory-service:8080 ---
+ad38a4435513 172.29.0.2
+080514710eca 172.29.0.5
+cfcb185bd2ad 172.29.0.4
+ad38a4435513 172.29.0.2
+ad38a4435513 172.29.0.2
+cfcb185bd2ad 172.29.0.4
+cfcb185bd2ad 172.29.0.4
+080514710eca 172.29.0.5
+cfcb185bd2ad 172.29.0.4
+cfcb185bd2ad 172.29.0.4
+080514710eca 172.29.0.5
+cfcb185bd2ad 172.29.0.4
+
+--- Reparto de las consultas por instancia ---
+     10 172.29.0.2
+     16 172.29.0.4
+      4 172.29.0.5
+
+--- Falla una instancia ---
+$ docker stop ad38a4435513ea75f64d1a5cb11621adab989e11a451cf7555cc02618f9dd0ec
+ad38a4435513ea75f64d1a5cb11621adab989e11a451cf7555cc02618f9dd0ec
+
+$ curl -s http://localhost:8081/api/orders/resolve
+{"name":"inventory-service","addresses":["172.29.0.4","172.29.0.5"]}
+
+     18 172.29.0.4 HTTP 200
+     12 172.29.0.5 HTTP 200
+
+$ docker compose up -d --scale inventory-service=1
+ Container shopresolver-orders-service-1 Running 
+ Container shopresolver-inventory-service-2 Stopping 
+ Container shopresolver-inventory-service-3 Stopping 
+ Container shopresolver-inventory-service-2 Stopped 
+ Container shopresolver-inventory-service-2 Removing 
+ Container shopresolver-inventory-service-2 Removed 
+ Container shopresolver-inventory-service-3 Stopped 
+ Container shopresolver-inventory-service-3 Removing 
+ Container shopresolver-inventory-service-3 Removed 
+ Container shopresolver-inventory-service-1 Starting 
+ Container shopresolver-inventory-service-1 Started 
+
+Salida guardada en /c/Users/Jose/Desktop/j/FACU/SO/2do/shopresolver/docs/salidas/ej07-11.txt

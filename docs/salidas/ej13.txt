@@ -1,0 +1,72 @@
+$ kubectl --context kind-shopresolver apply -f k8s/shopresolver.yaml
+namespace/ecommerce created
+deployment.apps/inventory-service created
+service/inventory-service created
+deployment.apps/orders-service created
+service/orders-service created
+
+===== Ejercicio 13 - Kubernetes =====
+
+$ k get pods -o wide
+NAME                                 READY   STATUS    RESTARTS   AGE   IP           NODE                         NOMINATED NODE   READINESS GATES
+client                               1/1     Running   0          7s    10.244.0.9   shopresolver-control-plane   <none>           <none>
+inventory-service-694dddbb9f-krtgg   1/1     Running   0          9s    10.244.0.6   shopresolver-control-plane   <none>           <none>
+inventory-service-694dddbb9f-mb422   1/1     Running   0          9s    10.244.0.7   shopresolver-control-plane   <none>           <none>
+inventory-service-694dddbb9f-rwjpw   1/1     Running   0          9s    10.244.0.5   shopresolver-control-plane   <none>           <none>
+orders-service-749959f4bd-xjnz6      1/1     Running   0          9s    10.244.0.8   shopresolver-control-plane   <none>           <none>
+
+$ k get service
+NAME                TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
+inventory-service   ClusterIP   10.96.136.163   <none>        8080/TCP         9s
+orders-service      NodePort    10.96.122.92    <none>        8080:30081/TCP   9s
+
+$ k get endpointslices -l kubernetes.io/service-name=inventory-service
+NAME                      ADDRESSTYPE   PORTS   ENDPOINTS                          AGE
+inventory-service-kq6v8   IPv4          8080    10.244.0.6,10.244.0.7,10.244.0.5   9s
+
+$ k exec client -- cat /etc/resolv.conf
+search ecommerce.svc.cluster.local svc.cluster.local cluster.local
+nameserver 10.96.0.10
+options ndots:5
+
+$ k exec client -- nslookup inventory-service.ecommerce.svc.cluster.local
+Server:		10.96.0.10
+Address:	10.96.0.10:53
+
+
+Name:	inventory-service.ecommerce.svc.cluster.local
+Address: 10.96.136.163
+
+
+--- OrdersService resuelve el nombre: obtiene la ClusterIP del Service, no las IP de los Pods ---
+$ k exec client -- wget -qO- http://orders-service:8080/api/orders/resolve
+{"name":"inventory-service","addresses":["10.96.136.163"]}
+
+--- 30 consultas: el Service reparte entre los Pods ---
+     13 inventory-service-694dddbb9f-krtgg 10.244.0.6
+      6 inventory-service-694dddbb9f-mb422 10.244.0.7
+     11 inventory-service-694dddbb9f-rwjpw 10.244.0.5
+
+--- Se elimina el Pod inventory-service-694dddbb9f-krtgg; el Deployment crea uno nuevo con otra IP ---
+$ k delete pod inventory-service-694dddbb9f-krtgg
+pod "inventory-service-694dddbb9f-krtgg" deleted from ecommerce namespace
+
+$ k get pods -l app=inventory-service -o wide
+NAME                                 READY   STATUS    RESTARTS   AGE   IP            NODE                         NOMINATED NODE   READINESS GATES
+inventory-service-694dddbb9f-kwfvb   1/1     Running   0          13s   10.244.0.10   shopresolver-control-plane   <none>           <none>
+inventory-service-694dddbb9f-mb422   1/1     Running   0          31s   10.244.0.7    shopresolver-control-plane   <none>           <none>
+inventory-service-694dddbb9f-rwjpw   1/1     Running   0          31s   10.244.0.5    shopresolver-control-plane   <none>           <none>
+
+$ k get endpointslices -l kubernetes.io/service-name=inventory-service
+NAME                      ADDRESSTYPE   PORTS   ENDPOINTS                           AGE
+inventory-service-kq6v8   IPv4          8080    10.244.0.7,10.244.0.5,10.244.0.10   31s
+
+$ k get service inventory-service
+NAME                TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+inventory-service   ClusterIP   10.96.136.163   <none>        8080/TCP   31s
+
+      9 inventory-service-694dddbb9f-kwfvb 10.244.0.10
+     10 inventory-service-694dddbb9f-mb422 10.244.0.7
+     11 inventory-service-694dddbb9f-rwjpw 10.244.0.5
+
+Para borrar el cluster: kind delete cluster --name shopresolver

@@ -1,0 +1,22 @@
+services:
+  inventory-service:
+    build: ./InventoryService
+    # No container_name and no host port: this allows
+    # docker compose up -d --scale inventory-service=3 (exercise 11).
+    networks:
+      - ecommerce-network
+
+  orders-service:
+    build: ./OrdersService
+    depends_on:
+      - inventory-service
+    environment:
+      Inventory__BaseUrl: http://inventory-service:8080
+    ports:
+      - "8081:8080"
+    networks:
+      - ecommerce-network
+
+networks:
+  ecommerce-network:
+    driver: bridge
